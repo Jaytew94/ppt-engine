@@ -214,7 +214,13 @@ async function captureAllSlides(onProgress){
     allSlides[i].style.zIndex='10';
     allSlides[i].querySelectorAll('.animate,.hero-title,.closing-title,.chapter-word')
       .forEach(el=>{el.style.opacity='1';el.style.transform='none';el.style.clipPath='none';});
-    await new Promise(r=>setTimeout(r,500));
+    // Wait for Unsplash async images to finish loading before screenshot
+    await Promise.all(
+      [...allSlides[i].querySelectorAll('img')]
+        .filter(img=>!img.complete)
+        .map(img=>new Promise(r=>{img.onload=r;img.onerror=r;}))
+    );
+    await new Promise(r=>setTimeout(r,800)); // extra buffer for fonts + render
     const canvas=await html2canvas(scaler,{
       width:1920,height:1080,scale:1,
       useCORS:true,allowTaint:true,
@@ -484,6 +490,48 @@ function validateSlides(){
   });
 }
 
+// ── UNSPLASH IMAGE LOADER ──
+// Reads window.UNSPLASH_KEY injected by AI from ppt-brief USER CONFIG
+// All <img data-topic="keyword"> tags are auto-fetched at page load
+// Fallback: gradient background (always visible instantly, never broken)
+async function initUnsplashImages(){
+  const key=window.UNSPLASH_KEY;
+  const imgs=document.querySelectorAll('img[data-topic]');
+  if(!imgs.length)return;
+  if(!key||key.includes('READ FROM')||key.length<10){
+    // No valid key — gradient fallback already showing via inline style, done
+    return;
+  }
+  const fetched={};
+  await Promise.all([...imgs].map(async img=>{
+    const topic=img.dataset.topic||'abstract';
+    try{
+      // Reuse same fetch result for identical keywords (saves API quota)
+      if(!fetched[topic]){
+        const res=await fetch(
+          `https://api.unsplash.com/photos/random?query=${encodeURIComponent(topic)}&orientation=landscape&client_id=${key}`,
+          {headers:{'Accept-Version':'v1'}}
+        );
+        if(!res.ok)throw new Error(res.status);
+        fetched[topic]=await res.json();
+      }
+      const data=fetched[topic];
+      // Fade in the real image over the gradient background
+      const tempImg=new Image();
+      tempImg.crossOrigin='anonymous';
+      tempImg.onload=()=>{
+        img.src=tempImg.src;
+        img.style.background='none';
+        img.title=`Photo by ${data.user.name} on Unsplash`;
+      };
+      tempImg.onerror=()=>{}; // keep gradient fallback
+      tempImg.src=data.urls.regular; // 1080px wide, high quality
+    }catch(e){
+      // Network error or quota exceeded — gradient fallback stays, no broken img
+    }
+  }));
+}
+
 // ── INIT ──
 buildAmbient();
 updateUI();
@@ -491,4 +539,5 @@ validateSlides();
 initEditableImages();
 initEditableCounters();
 initEditableProgressBars();
+initUnsplashImages(); // async — loads Unsplash images after page is interactive
 document.fonts.ready.then(()=>setTimeout(()=>triggerAnim(slides[0]),100));
