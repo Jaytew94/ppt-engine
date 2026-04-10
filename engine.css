@@ -145,6 +145,29 @@ p{font-size:28px;line-height:1.55;color:var(--text-secondary);}
   outline:2px dashed rgba(255,255,255,0.3) !important;transition:filter 0.2s;}
 .edit-mode img:hover{outline:2px solid var(--color-primary) !important;filter:brightness(1.1);}
 
+/* ── DRAG FREE LAYOUT ── */
+.ppt-draggable{cursor:default;transition:box-shadow .15s;}
+.ppt-draggable:hover{outline:1px dashed rgba(255,255,255,0.25);outline-offset:4px;}
+.ppt-draggable.is-dragging{z-index:999!important;opacity:.88;
+  box-shadow:0 8px 40px rgba(0,0,0,.5);}
+.ppt-drag-handle{
+  position:absolute;top:-18px;left:0;
+  padding:2px 8px;border-radius:4px;
+  background:var(--color-primary);color:#fff;
+  font-size:14px;letter-spacing:3px;line-height:1.2;
+  cursor:grab;user-select:none;opacity:0;
+  transition:opacity .15s;white-space:nowrap;z-index:9999;
+  pointer-events:all;
+}
+.ppt-drag-handle:active{cursor:grabbing;}
+.ppt-draggable:hover .ppt-drag-handle,
+.ppt-draggable.is-dragging .ppt-drag-handle{opacity:1;}
+
+/* ── LAYOUT OVERFLOW PROTECTION ── */
+.col-card,.grid-card,.l-three-col,.three-col-grid,
+.l-split,.content-pane,.visual-pane{overflow:hidden;}
+.slide{isolation:isolate;}
+
 /* ── PROGRESS BAR ── */
 .progress-track{width:100%;height:12px;background:rgba(255,255,255,0.1);
   border-radius:6px;overflow:hidden;}

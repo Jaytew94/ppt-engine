@@ -146,10 +146,19 @@ document.addEventListener('touchend',e=>{
     chrome.className='ui-chrome';chrome.id='uiChrome';
     chrome.innerHTML=`
       <button class="ui-btn btn-edit" id="editBtn" onclick="toggleEdit()">✏️ 编辑</button>
+      <button class="ui-btn btn-save" id="saveBtn" onclick="saveHTML()" style="display:none;">💾 保存HTML</button>
       <button class="ui-btn btn-pdf" id="pdfBtn" onclick="exportPDF()">📄 导出PDF</button>
       <button class="ui-btn btn-pptx" id="pptxBtn" onclick="exportPPTX()">📊 导出PPTX</button>
       <button class="ui-btn btn-present" onclick="startPresent()">▶ 演示</button>`;
     document.body.appendChild(chrome);
+  } else if(!document.getElementById('saveBtn')){
+    // Add save button to existing chrome if missing
+    const saveBtn=document.createElement('button');
+    saveBtn.className='ui-btn btn-save';saveBtn.id='saveBtn';
+    saveBtn.textContent='💾 保存HTML';saveBtn.onclick=saveHTML;
+    saveBtn.style.display='none';
+    const editBtn=document.getElementById('editBtn');
+    editBtn.parentNode.insertBefore(saveBtn,editBtn.nextSibling);
   }
   document.body.classList.remove('present-mode');
 })();
@@ -160,11 +169,24 @@ function toggleEdit(){
   editMode=!editMode;
   document.body.classList.toggle('edit-mode',editMode);
   const btn=document.getElementById('editBtn');
+  const saveBtn=document.getElementById('saveBtn');
   if(btn)btn.textContent=editMode?'✅ 完成':'✏️ 编辑';
-  document.querySelectorAll('h1,h2,h3,p,li,.eyebrow,.chapter-word,.statement-text,.closing-title')
+  if(saveBtn)saveBtn.style.display=editMode?'':'none';
+  // Expanded: all text-bearing elements become editable
+  document.querySelectorAll([
+    'h1','h2','h3','h4','h5','h6','p','li',
+    '.eyebrow','.chapter-word','.statement-text','.closing-title',
+    '.data-number','.data-label','.col-num',
+    '.presenter-name','.presenter-title','.presenter-brand',
+    '.process-title','.t-title','.t-year','.t-desc'
+  ].join(','))
     .forEach(el=>el.contentEditable=editMode?'true':'false');
-  if(editMode)document.querySelectorAll('.counter')
-    .forEach(el=>el.title='点击编辑数值');
+  if(editMode){
+    document.querySelectorAll('.counter').forEach(el=>el.title='点击编辑数值');
+    initDragMode();
+  } else {
+    destroyDragMode();
+  }
 }
 function startPresent(){
   if(editMode)toggleEdit();
@@ -530,6 +552,110 @@ async function initUnsplashImages(){
       // Network error or quota exceeded — gradient fallback stays, no broken img
     }
   }));
+}
+
+// ── DRAG FREE LAYOUT ──
+// Uses interact.js for drag. Positions stored as data-drag-x/y (px in 1920×1080 space).
+// Uses position:relative + top/left so GSAP transform-based animations don't conflict.
+
+function getScaleValue(){
+  const t=document.getElementById('scaler').style.transform;
+  const m=t.match(/scale\(([\d.]+)\)/);
+  return m?parseFloat(m[1]):1;
+}
+
+function restoreDragPositions(slide){
+  // Re-apply saved drag offsets (top/left survive GSAP, but call after resetAnims just in case)
+  const scope=slide||document;
+  scope.querySelectorAll('.ppt-draggable[data-drag-x]').forEach(el=>{
+    el.style.position='relative';
+    el.style.left=parseFloat(el.dataset.dragX||0)+'px';
+    el.style.top=parseFloat(el.dataset.dragY||0)+'px';
+  });
+}
+
+async function initDragMode(){
+  await loadScript('https://cdn.jsdelivr.net/npm/interactjs@1.10.27/dist/interact.min.js');
+  const SKIP=['span','a','strong','em','i','b','br','small'];
+  document.querySelectorAll('.slide .animate').forEach(el=>{
+    if(SKIP.includes(el.tagName.toLowerCase()))return;
+    if(el.closest('.ppt-drag-handle'))return;
+    el.classList.add('ppt-draggable');
+    el.style.position='relative';
+    // Restore any previously saved drag position
+    el.style.left=parseFloat(el.dataset.dragX||0)+'px';
+    el.style.top=parseFloat(el.dataset.dragY||0)+'px';
+    // Add drag handle if not present
+    if(!el.querySelector('.ppt-drag-handle')){
+      const h=document.createElement('div');
+      h.className='ppt-drag-handle';
+      h.innerHTML='⠿⠿';
+      h.title='拖拽移动';
+      el.appendChild(h);
+    }
+    // Init interact drag (allowFrom handle so text is still editable)
+    interact(el).draggable({
+      allowFrom:'.ppt-drag-handle',
+      listeners:{
+        move(e){
+          const s=getScaleValue()||1;
+          const nx=parseFloat(e.target.dataset.dragX||0)+e.dx/s;
+          const ny=parseFloat(e.target.dataset.dragY||0)+e.dy/s;
+          e.target.dataset.dragX=nx;
+          e.target.dataset.dragY=ny;
+          e.target.style.left=nx+'px';
+          e.target.style.top=ny+'px';
+        },
+        start(e){e.target.classList.add('is-dragging');},
+        end(e){e.target.classList.remove('is-dragging');}
+      }
+    });
+  });
+}
+
+function destroyDragMode(){
+  document.querySelectorAll('.ppt-draggable').forEach(el=>{
+    try{if(window.interact)interact(el).unset();}catch(e){}
+    el.classList.remove('ppt-draggable','is-dragging');
+    el.querySelectorAll('.ppt-drag-handle').forEach(h=>h.remove());
+    // Keep position:relative and left/top so positions survive
+  });
+}
+
+// ── SAVE HTML (bakes current state into downloadable file) ──
+function saveHTML(){
+  const clone=document.documentElement.cloneNode(true);
+  // Remove file inputs (unserializable)
+  clone.querySelectorAll('input[type=file]').forEach(el=>el.remove());
+  // Remove drag handles
+  clone.querySelectorAll('.ppt-drag-handle').forEach(el=>el.remove());
+  // Clean drag classes
+  clone.querySelectorAll('.ppt-draggable').forEach(el=>el.classList.remove('ppt-draggable'));
+  clone.querySelectorAll('.is-dragging').forEach(el=>el.classList.remove('is-dragging'));
+  // Clean edit/present mode classes
+  const body=clone.querySelector('body');
+  if(body)body.classList.remove('edit-mode','present-mode');
+  // Reset to first slide active; make all .animate elements visible
+  clone.querySelectorAll('.slide').forEach((s,i)=>{
+    s.classList.toggle('active',i===0);
+    s.style.opacity=i===0?'1':'0';
+    s.style.zIndex=i===0?'10':'0';
+    s.querySelectorAll('.animate,.hero-title,.closing-title,.chapter-word')
+      .forEach(el=>{el.style.opacity='1';el.style.transform='';el.style.clipPath='';});
+  });
+  // Restore edit button label
+  const editBtn=clone.getElementById('editBtn');
+  if(editBtn)editBtn.textContent='✏️ 编辑';
+  const saveBtn=clone.getElementById('saveBtn');
+  if(saveBtn)saveBtn.style.display='none';
+  const html='<!DOCTYPE html>\n'+clone.outerHTML;
+  const blob=new Blob([html],{type:'text/html;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;a.download=(document.title||'presentation')+'-saved.html';
+  document.body.appendChild(a);a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 // ── INIT ──
