@@ -75,7 +75,8 @@ function updateUI(){
 
 function triggerAnim(slide){
   const type=slide.dataset.animation||'stagger';
-  if(type==='stagger')
+  const KNOWN=['stagger','cinematic','chapter','counter','timeline','process','wipe'];
+  if(type==='stagger'||!KNOWN.includes(type))
     gsap.fromTo(slide.querySelectorAll('.animate'),
       {opacity:0,y:55},{opacity:1,y:0,duration:.75,stagger:.13,ease:'power3.out'});
   if(type==='cinematic'){
@@ -113,6 +114,31 @@ function triggerAnim(slide){
     slide.querySelectorAll('.animate').forEach((el,i)=>
       gsap.fromTo(el,{clipPath:'inset(0 100% 0 0)'},
         {clipPath:'inset(0 0% 0 0)',duration:.9,delay:i*.15,ease:'power4.inOut'}));
+  // ── SAFETY NET: after all animation time, force-reveal any still-hidden .animate elements ──
+  gsap.delayedCall(3,()=>{
+    slide.querySelectorAll('.animate,.hero-title,.closing-title,.chapter-word,.t-node,.process-step')
+      .forEach(el=>{
+        if(parseFloat(window.getComputedStyle(el).opacity)<0.05)
+          gsap.to(el,{opacity:1,y:0,x:0,clipPath:'none',duration:.5,ease:'power2.out'});
+      });
+  });
+}
+
+// ── DRAG UNDO HISTORY ──
+const _dragHistory=[];
+function _pushDragUndo(el){
+  _dragHistory.push({el,x:parseFloat(el.dataset.dragX||0),y:parseFloat(el.dataset.dragY||0)});
+  if(_dragHistory.length>80)_dragHistory.shift();
+}
+function undoDrag(){
+  const last=_dragHistory.pop();
+  if(!last)return;
+  last.el.dataset.dragX=last.x;
+  last.el.dataset.dragY=last.y;
+  last.el.style.left=last.x+'px';
+  last.el.style.top=last.y+'px';
+  gsap.fromTo(last.el,{outline:'2px solid var(--color-primary)'},
+    {outline:'0px solid transparent',duration:.6,clearProps:'outline'});
 }
 
 // ── KEYBOARD + REMOTE CONTROL ──
@@ -124,6 +150,13 @@ document.addEventListener('keydown',e=>{
   if(e.key==='F5'||e.key==='f'||e.key==='F'){e.preventDefault();startPresent();}
   if(e.key==='Escape')exitPresent();
   if((e.key==='e'||e.key==='E')&&!presentMode){e.preventDefault();toggleEdit();}
+  // Ctrl+Z / Cmd+Z: undo drag in edit mode (text undo handled natively by browser)
+  if((e.key==='z'||e.key==='Z')&&(e.ctrlKey||e.metaKey)&&editMode){
+    // Only intercept if focused element is NOT a contentEditable (let browser handle text undo)
+    if(!document.activeElement||document.activeElement.contentEditable!=='true'){
+      e.preventDefault();undoDrag();
+    }
+  }
   if(e.key==='MediaNextTrack'||e.key==='MediaTrackNext')next();
   if(e.key==='MediaPreviousTrack'||e.key==='MediaTrackPrevious')prev();
   if(e.key==='b'||e.key==='B'){
@@ -504,11 +537,22 @@ function buildAmbientCSS(layer){
     <style>@keyframes _af1{from{transform:translate(0,0)}to{transform:translate(100px,70px)}}@keyframes _af2{from{transform:translate(0,0)}to{transform:translate(-80px,-60px)}}</style>`;
 }
 
-// ── EMPTY SLIDE GUARD ──
+// ── EMPTY SLIDE GUARD + AUTO-FIX ──
 function validateSlides(){
   document.querySelectorAll('.slide').forEach((s,i)=>{
-    if(s.innerText.trim().length<5)
-      console.warn(`⚠️ Slide ${i+1} appears empty`);
+    const text=s.innerText.trim();
+    const animEls=s.querySelectorAll('.animate');
+    const contentEls=s.querySelectorAll('h1,h2,h3,h4,p,li,div[class]');
+    // Warn if slide has content elements but NONE have .animate (content stays hidden forever)
+    if(contentEls.length>2&&animEls.length===0){
+      console.warn(`⚠️ Slide ${i+1}: ${contentEls.length} content elements but 0 have class="animate" — will be invisible!`);
+      // Auto-fix: add .animate to block elements so they get revealed
+      contentEls.forEach(el=>el.classList.add('animate'));
+    }
+    if(text.length<5){
+      console.warn(`⚠️ Slide ${i+1} appears empty — forcing visibility`);
+      s.querySelectorAll('*').forEach(el=>el.style.opacity='1');
+    }
   });
 }
 
@@ -576,37 +620,37 @@ function restoreDragPositions(slide){
 
 async function initDragMode(){
   await loadScript('https://cdn.jsdelivr.net/npm/interactjs@1.10.27/dist/interact.min.js');
-  const SKIP=['span','a','strong','em','i','b','br','small'];
-  document.querySelectorAll('.slide .animate').forEach(el=>{
-    if(SKIP.includes(el.tagName.toLowerCase()))return;
+  const SKIP_TAGS=['span','a','strong','em','i','b','br','small','button','input','select'];
+  // Target: .animate elements + common layout blocks that might lack .animate
+  const extraSel='.col-card,.grid-card,.t-node,.process-step,.stat-block,.l-split>.content-pane,.l-split>.visual-pane';
+  const seen=new WeakSet();
+  [...document.querySelectorAll(`.slide .animate, .slide ${extraSel.split(',').join(', .slide ')}`)].forEach(el=>{
+    if(seen.has(el))return;seen.add(el);
+    if(SKIP_TAGS.includes(el.tagName.toLowerCase()))return;
     if(el.closest('.ppt-drag-handle'))return;
     el.classList.add('ppt-draggable');
     el.style.position='relative';
-    // Restore any previously saved drag position
     el.style.left=parseFloat(el.dataset.dragX||0)+'px';
     el.style.top=parseFloat(el.dataset.dragY||0)+'px';
-    // Add drag handle if not present
     if(!el.querySelector('.ppt-drag-handle')){
       const h=document.createElement('div');
-      h.className='ppt-drag-handle';
-      h.innerHTML='⠿⠿';
-      h.title='拖拽移动';
+      h.className='ppt-drag-handle';h.innerHTML='⠿⠿';h.title='拖拽移动（Ctrl+Z撤销）';
       el.appendChild(h);
     }
-    // Init interact drag (allowFrom handle so text is still editable)
     interact(el).draggable({
       allowFrom:'.ppt-drag-handle',
       listeners:{
+        start(e){
+          _pushDragUndo(e.target); // save position BEFORE move for undo
+          e.target.classList.add('is-dragging');
+        },
         move(e){
           const s=getScaleValue()||1;
           const nx=parseFloat(e.target.dataset.dragX||0)+e.dx/s;
           const ny=parseFloat(e.target.dataset.dragY||0)+e.dy/s;
-          e.target.dataset.dragX=nx;
-          e.target.dataset.dragY=ny;
-          e.target.style.left=nx+'px';
-          e.target.style.top=ny+'px';
+          e.target.dataset.dragX=nx;e.target.dataset.dragY=ny;
+          e.target.style.left=nx+'px';e.target.style.top=ny+'px';
         },
-        start(e){e.target.classList.add('is-dragging');},
         end(e){e.target.classList.remove('is-dragging');}
       }
     });
